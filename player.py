@@ -2,6 +2,7 @@ import threading
 import time
 
 import Pyro4
+from Pyro4.errors import ConnectionClosedError, CommunicationError
 from deuces.card import Card
 from deuces.deck import Deck
 from deuces.evaluator import Evaluator
@@ -11,6 +12,19 @@ def start_thread(target, args=()):
     thread = threading.Thread(target=target, args=args)
     thread.setDaemon(True)
     thread.start()
+
+
+def connection_decorator(func):
+    def wrap_func(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except CommunicationError as e:
+            self.detect_failures()
+
+            print(e)
+
+    return wrap_func
+
 
 @Pyro4.expose
 class Player:
@@ -35,6 +49,9 @@ class Player:
         9 is referee gather desisions(after it he compute all scores and send them)
         10 is players are waiting for new referee
         """
+
+    def ping(self):
+        return {'pong': 'pong'}
 
     @property
     def name(self):
@@ -69,6 +86,30 @@ class Player:
                 return player
         return None
 
+    def detect_failures(self):
+        players = self.players
+        for player in players:
+            try:
+                res = player.ping()
+                if res['pong'] != 'pong':
+                    self.proceed_failured_node(player)
+            except CommunicationError:
+                self.proceed_failured_node(player)
+
+    def proceed_failured_node(self, node):
+        failured_player = node
+        self.players.remove(failured_player)
+        self.active_players.remove(failured_player)
+        for player in self.players:
+            try:
+                player.notify_about_faulure()
+            except CommunicationError:
+                self.proceed_failured_node(player)
+
+    def notify_about_faulure(self):
+        self.detect_failures()
+
+    @connection_decorator
     def ask_to_play_to(self, player_uri):
         # print('I am %s and i am in ask_to_play_to' % self.name)
         if self.state == 0:
@@ -80,6 +121,7 @@ class Player:
         else:
             raise ValueError("Can not register while playing")
 
+    @connection_decorator
     def ask_to_play_with(self, player_uri):
         # print('I am %s and i am in ask_to_play_with' % self.name)
         if self.state == 0:
@@ -94,6 +136,7 @@ class Player:
             raise ValueError("Can not register while playing")
 
     @Pyro4.oneway
+    @connection_decorator
     def notify_about_new_player(self, other):
         if self.state == 0:
             print('New player in lobby: %s' % other.name)
@@ -101,10 +144,12 @@ class Player:
         else:
             raise ValueError("Can not register while playing")
 
+    @connection_decorator
     def cond_start(self):
         if len(self.players) == 3 and self.is_leader:
             self.start_game_as_leader()
 
+    @connection_decorator
     def _add_player(self, other):
         # print('I am %s and i am in add_player' % self.name)
         if self.state == 0:
@@ -113,6 +158,7 @@ class Player:
         else:
             raise ValueError("Can not register while playing")
 
+    @connection_decorator
     def start_game_as_leader(self):
         if self.state != 0:
             raise ValueError('Only at registering phase you can start the game')
@@ -126,6 +172,7 @@ class Player:
         self.select_referee()
 
     @Pyro4.oneway
+    @connection_decorator
     def start_game(self):
         # print('I am %s and i am in start_game' % self.name)
         if self.state != 0:
@@ -135,12 +182,14 @@ class Player:
             print('The leader is looking for referee now')
 
     @Pyro4.oneway
+    @connection_decorator
     def grant_referee(self):
         if self.state != 1 and self.state != 10:
             raise ValueError('Only at state 1 or 10, referee can be granted')
         self.is_referee = True
         print('You are new referee now')
 
+    @connection_decorator
     def select_referee(self):
         if self.state != 1:
             raise ValueError('Only at state 1, referee can be granted')
@@ -161,6 +210,7 @@ class Player:
             raise ValueError('Referees name have not found')
 
     @Pyro4.oneway
+    @connection_decorator
     def end_referee_voting(self, referee):
         if self.state != 1 and self.state != 10:
             raise ValueError('End of referee election can be only at state 1 or 10, current is %d' % self.state)
@@ -186,6 +236,7 @@ class Player:
                 self.bank = 0
                 self.ask_for_decision_as_referee()
 
+    @connection_decorator
     def give_cards_to_player(self, player):
         if self.state != 2:
             raise ValueError('Only at second state referee can give cards')
@@ -194,6 +245,7 @@ class Player:
         player.get_cards(cards_to_give)
 
     @Pyro4.oneway
+    @connection_decorator
     def get_cards(self, cards):
         if self.state != 2:
             raise ValueError('Only at second state referee can give cards')
@@ -202,6 +254,7 @@ class Player:
         Card.print_pretty_cards(cards)
 
     @Pyro4.oneway
+    @connection_decorator
     def begin_gathering_of_decisions(self):
         if self.state == 2:
             self.state = 3
@@ -216,6 +269,7 @@ class Player:
             self.state = 9
             print('You got the 5th card on board, now referee gathers your decisions')
 
+    @connection_decorator
     def ask_for_decision_as_referee(self):
         if not self.is_referee:
             raise ValueError('Only referees can gather decisions')
@@ -265,11 +319,14 @@ class Player:
         else:
             self.end_the_game_as_referee()
 
+    @connection_decorator
     def ask_for_decision(self):
-        decision = input('We are waiting for your decision. Print your decision in next format "pass" "check" "bet 10":')
+        decision = input(
+            'We are waiting for your decision. Print your decision in next format "pass" "check" "bet 10":')
         return {'decision': decision}
 
     @Pyro4.oneway
+    @connection_decorator
     def end_of_gathering_decision(self):
         if self.state == 3:
             self.state = 4
@@ -283,9 +340,11 @@ class Player:
             print('Now you will get 1 more card on board')
 
     @Pyro4.oneway
+    @connection_decorator
     def notify_about_decision(self, decision, player):
         print('Player %s: %s' % (player.name, decision))
 
+    @connection_decorator
     def put_cards_on_board_as_referee(self):
         if self.state == 4:
             self.board = []
@@ -308,11 +367,13 @@ class Player:
         self.ask_for_decision_as_referee()
 
     @Pyro4.oneway
+    @connection_decorator
     def put_cards_on_board(self, cards):
         self.board += cards
         print('Now board cards are:')
         Card.print_pretty_cards(cards)
 
+    @connection_decorator
     def end_the_game_as_referee(self):
         if self.state != 9:
             raise ValueError('Only at 9th state you can end the game')
@@ -333,6 +394,7 @@ class Player:
         self.state = 10
         self.select_new_referee()
 
+    @connection_decorator
     def select_new_referee(self):
         if self.state != 10:
             raise ValueError('You can select referee only at 10th state')
@@ -357,6 +419,7 @@ class Player:
         del self.deck
 
     @Pyro4.oneway
+    @connection_decorator
     def end_the_game(self, player, bank):
         if self.state == 9:
             self.state = 10
@@ -364,6 +427,7 @@ class Player:
             del self.hand_cards
             del self.board
 
+    @connection_decorator
     def print_players(self):
         players_to_print = list(map(lambda pl: pl.name, self.players))
         print(players_to_print)
