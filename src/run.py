@@ -3,7 +3,7 @@ import threading
 
 import Pyro4
 
-from player import Player
+from src.player import Player
 
 def run_ask_to_play():
     player.ask_to_play_to(player_uri)
