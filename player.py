@@ -1,12 +1,8 @@
 import threading
-import time
 from collections import deque
 
 import Pyro4
-from Pyro4.errors import ConnectionClosedError, CommunicationError
-from deuces.card import Card
-from deuces.deck import Deck
-from deuces.evaluator import Evaluator
+from Pyro4.errors import CommunicationError
 
 
 def start_thread(target, args=()):

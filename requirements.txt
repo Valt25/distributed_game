@@ -1,3 +1,2 @@
--e git+https://github.com/pashadia/deuces.git@fdf6125230caa8e50010b03def83308d8f59039f#egg=deuces
 Pyro4==4.75
 serpent==1.28
